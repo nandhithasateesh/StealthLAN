@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>StealthLAN</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page">
+
+    <!-- JOIN SCREEN -->
+    <div id="joinScreen" class="join-panel glass">
+      <div class="brand">
+        <div class="logo">SL</div>
+        <div class="title">StealthLAN</div>
+      </div>
+
+      <p class="tag">Private, local, encrypted chat — no cloud, no traces.</p>
+
+      <div class="form">
+        <label>Room ID
+          <input id="roomInput" placeholder="e.g. hostel-21" />
+        </label>
+
+        <label>Passphrase
+          <input id="passInput" type="password" placeholder="share securely" />
+        </label>
+
+        <div class="row">
+          <button id="joinBtn" class="btn primary">Join Room</button>
+        </div>
+
+        <div class="hint">Use same passphrase on both devices. Messages vanish on close.</div>
+      </div>
+
+      <div class="footer">
+        <small>Local-only • E2E AES-GCM • Files & Text</small>
+      </div>
+    </div>
+
+    <!-- CHAT SCREEN -->
+    <div id="app" class="chat-panel hidden glass">
+      <div class="chat-top">
+        <div class="peer-info">
+          <div class="dot online"></div>
+          <div class="peer-name">Status: <span id="statusText">Not Connected</span></div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" onclick="location.reload()">Leave</button>
+        </div>
+      </div>
+
+      <div id="messages" class="messages"></div>
+
+      <div class="composer">
+        <input id="textInput" placeholder="Type a secure message..." autocomplete="off" />
+        <label class="file-attach">
+          <input id="fileInput" type="file" />
+          📎
+        </label>
+        <button id="sendText" class="btn circle">➤</button>
+      </div>
+
+      <div class="small-controls">
+        <button id="sendFile" class="btn subtle">Send File</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- socket.io + app script -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
