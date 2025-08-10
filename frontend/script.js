@@ -94,7 +94,6 @@ async function decryptData(iv, ciphertext) {
     throw error;
   }
 }
-
 // WebRTC Connection Management
 async function startConnection() {
   try {
