@@ -58,19 +58,42 @@ async function getPassphraseHash(pass) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function toBinaryString(bytes) {
+  let str = '';
+  for (let i = 0; i < bytes.length; i++) {
+    str += String.fromCharCode(bytes[i]);
+  }
+  return str;
+}
+
+function toUint8Array(base64) {
+  const binStr = atob(base64);
+  const len = binStr.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    arr[i] = binStr.charCodeAt(i);
+  }
+  return arr;
+}
+
 async function encryptPayload(payloadObj) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const bytes = new TextEncoder().encode(JSON.stringify(payloadObj));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, encryptionKey, bytes);
-  return { iv: Array.from(iv), data: Array.from(new Uint8Array(ciphertext)) };
+  const ctArr = new Uint8Array(ciphertext);
+  const ivBase64 = btoa(toBinaryString(iv));
+  const dataBase64 = btoa(toBinaryString(ctArr));
+  return { iv: ivBase64, data: dataBase64 };
 }
 
-async function decryptPayload({ iv, data }) {
+async function decryptPayload(envelope) {
   try {
+    const iv = toUint8Array(envelope.iv);
+    const data = toUint8Array(envelope.data);
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: new Uint8Array(iv) },
+      { name: 'AES-GCM', iv },
       encryptionKey,
-      new Uint8Array(data)
+      data
     );
     return JSON.parse(new TextDecoder().decode(new Uint8Array(plaintext)));
   } catch (e) {
@@ -203,17 +226,17 @@ async function connectToPeer(peerId, initiator) {
 }
 
 /* ---------- File transfer (chunked) ---------- */
-const CHUNK_SIZE = 32 * 1024;
+const CHUNK_SIZE = 16 * 1024;
 const incomingFiles = new Map(); // `${peerId}:${fileId}` -> state
 
 function ensureReceiverState(peerId, fileId, name, size, mime) {
   incomingFiles.set(`${peerId}:${fileId}`, { name, size, mime, chunks: [], received: 0 });
 }
 
-function appendChunk(peerId, fileId, seq, chunkArr) {
+function appendChunk(peerId, fileId, seq, base64Chunk) {
   const key = `${peerId}:${fileId}`;
   const st = incomingFiles.get(key); if (!st) return;
-  st.chunks[seq] = new Uint8Array(chunkArr);
+  st.chunks[seq] = toUint8Array(base64Chunk);
   st.received += st.chunks[seq].length;
 }
 
@@ -253,11 +276,13 @@ async function sendFileToAll(file) {
   for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(meta));
 
   for (let i = 0; i < total; i++) {
+    const chunkBytes = bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const chunkBase64 = btoa(toBinaryString(chunkBytes));
     const part = await encryptPayload({
       kind: 'file-chunk',
       fileId,
       seq: i,
-      chunk: Array.from(bytes.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, bytes.length)))
+      chunk: chunkBase64
     });
     for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(part));
   }
