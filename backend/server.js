@@ -21,7 +21,7 @@ const io = new Server(server, {
 });
 
 /**
- * rooms: Map<roomId, Map<socketId, { name: string }>>
+ * rooms: Map<roomId, {hash: string, members: Map<socketId, { name: string }>>}
  */
 const rooms = new Map();
 
@@ -30,21 +30,29 @@ io.on('connection', (socket) => {
   socket.data.room = null;
   socket.data.name = null;
 
-  // Join a room with a display name
-  socket.on('join-room', ({ room, name }) => {
-    if (!room || !name) return;
+  // Join a room with a display name and passphrase hash
+  socket.on('join-room', (data) => {
+    const { room, name, passphraseHash } = data;
+    if (!room || !name || !passphraseHash) return;
 
     // leave previous room if any
     if (socket.data.room) {
       leaveCurrentRoom(socket);
     }
 
+    if (rooms.has(room)) {
+      if (rooms.get(room).hash !== passphraseHash) {
+        return socket.emit('join-error', 'Room name already exists. Please use a different room name or enter the correct passphrase.');
+      }
+    } else {
+      rooms.set(room, { hash: passphraseHash, members: new Map() });
+    }
+
     socket.join(room);
     socket.data.room = room;
     socket.data.name = name;
 
-    if (!rooms.has(room)) rooms.set(room, new Map());
-    const members = rooms.get(room);
+    const members = rooms.get(room).members;
     members.set(socket.id, { name });
 
     // Send existing peers to the newcomer (excluding themselves)
@@ -92,10 +100,10 @@ function leaveCurrentRoom(socket, { disconnecting = false } = {}) {
   const name = socket.data.name || 'Unknown';
   if (!room) return;
 
-  const members = rooms.get(room);
-  if (members) {
-    members.delete(socket.id);
-    if (members.size === 0) rooms.delete(room);
+  const roomData = rooms.get(room);
+  if (roomData) {
+    roomData.members.delete(socket.id);
+    if (roomData.members.size === 0) rooms.delete(room);
   }
 
   socket.leave(room);

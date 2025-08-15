@@ -52,6 +52,12 @@ async function deriveKey(pass) {
   );
 }
 
+async function getPassphraseHash(pass) {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pass));
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function encryptPayload(payloadObj) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const bytes = new TextEncoder().encode(JSON.stringify(payloadObj));
@@ -174,8 +180,6 @@ socket.on('signal', async ({ from, data }) => {
 
   if (data.type === 'offer') {
     await pc.setRemoteDescription(new RTCSessionDescription(data));
-    const ch = pc.createDataChannel('chat', { ordered: true });
-    setupDataChannel(from, ch);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit('signal', { room, to: from, data: answer });
@@ -273,12 +277,13 @@ els.joinBtn.onclick = async () => {
   els.statusText.innerText = 'Deriving key...';
   try {
     encryptionKey = await deriveKey(passphrase);
+    const passphraseHash = await getPassphraseHash(passphrase);
     els.joinScreen.classList.add('hidden');
     els.app.classList.remove('hidden');
     els.statusText.innerText = 'Connecting...';
     setOnlineDot(false);
 
-    socket.emit('join-room', { room, name: displayName });
+    socket.emit('join-room', { room, name: displayName, passphraseHash });
     addSystem(`Joined as ${displayName} • room ${room}`);
   } catch (e) {
     console.error(e);
@@ -286,6 +291,15 @@ els.joinBtn.onclick = async () => {
     els.joinBtn.disabled = false;
   }
 };
+
+socket.on('join-error', (message) => {
+  alert(message);
+  els.app.classList.add('hidden');
+  els.joinScreen.classList.remove('hidden');
+  els.joinBtn.disabled = false;
+  els.messages.innerHTML = '';
+  els.statusText.innerText = 'No peers connected';
+});
 
 els.leaveBtn.onclick = () => {
   socket.emit('leave-room', { room });
@@ -362,7 +376,7 @@ function addFile(name, url, isMe, who = '') {
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 window.addEventListener('online', () => {
