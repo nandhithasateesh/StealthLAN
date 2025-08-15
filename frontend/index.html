@@ -27,11 +27,15 @@
           <input id="passInput" type="password" placeholder="share securely" />
         </label>
 
+        <label>Name
+          <input id="nameInput" placeholder="e.g. Alex" />
+        </label>
+
         <div class="row">
           <button id="joinBtn" class="btn primary">Join Room</button>
         </div>
 
-        <div class="hint">Use same passphrase on both devices. Messages vanish on close.</div>
+        <div class="hint">Use same passphrase on all devices. Messages vanish on close.</div>
       </div>
 
       <div class="footer">
@@ -43,11 +47,11 @@
     <div id="app" class="chat-panel hidden glass">
       <div class="chat-top">
         <div class="peer-info">
-          <div class="dot online"></div>
-          <div class="peer-name">Status: <span id="statusText">Not Connected</span></div>
+          <div class="dot"></div>
+          <div class="peer-name"><span id="statusText">No peers connected</span></div>
         </div>
         <div class="actions">
-          <button class="btn ghost" onclick="location.reload()">Leave</button>
+          <button id="leaveBtn" class="btn ghost">Leave</button>
         </div>
       </div>
 
@@ -55,11 +59,11 @@
 
       <div class="composer">
         <input id="textInput" placeholder="Type a secure message..." autocomplete="off" />
-        <label class="file-attach">
+        <label class="file-attach" title="Attach a file">
           <input id="fileInput" type="file" />
           📎
         </label>
-        <button id="sendText" class="btn circle">➤</button>
+        <button id="sendText" class="btn circle" title="Send">➤</button>
       </div>
 
       <div class="small-controls">

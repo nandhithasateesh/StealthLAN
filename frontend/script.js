@@ -1,365 +1,370 @@
-// Complete script.js with WebRTC, encryption, and error handling
+// frontend/script.js
 
-// Check for Web Cryptography API support
 if (!window.crypto || !window.crypto.subtle) {
-  alert("Web Cryptography API not supported in this browser. Please use Chrome, Firefox, or Edge.");
+  alert("Web Cryptography API not supported. Use the latest Chrome/Edge/Firefox. If using http://LAN-IP, add it to chrome://flags/#unsafely-treat-insecure-origin-as-secure for testing.");
   throw new Error("Web Cryptography API not available");
 }
 
-const socket = io(window.location.origin);
-let room = '';
-let passphrase = '';
-let peerConnection;
-let dataChannel;
-let encryptionKey;
-let peerId;
-let remotePeerId;
+const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
 
-// Crypto settings
+let room = '';
+let displayName = '';
+let passphrase = '';
+let encryptionKey;
+
+// multi-peer maps
+const peerConnections = new Map();
+const dataChannels = new Map();
+const peerNames = new Map();
+
 const PBKDF2_ITERATIONS = 50000;
 const SALT = new TextEncoder().encode('stealthlan-salt');
 
-// DOM Elements
-const elements = {
+const els = {
   joinScreen: document.getElementById('joinScreen'),
   app: document.getElementById('app'),
   statusText: document.getElementById('statusText'),
   roomInput: document.getElementById('roomInput'),
+  nameInput: document.getElementById('nameInput'),
   passInput: document.getElementById('passInput'),
   joinBtn: document.getElementById('joinBtn'),
+  leaveBtn: document.getElementById('leaveBtn'),
   messages: document.getElementById('messages'),
   textInput: document.getElementById('textInput'),
   sendText: document.getElementById('sendText'),
   fileInput: document.getElementById('fileInput'),
-  sendFile: document.getElementById('sendFile')
+  sendFile: document.getElementById('sendFile'),
+  statusDot: document.querySelector('.dot')
 };
 
-// Key derivation
 async function deriveKey(pass) {
-  try {
-    const enc = new TextEncoder();
-    const passKey = await window.crypto.subtle.importKey(
-      'raw',
-      enc.encode(pass),
-      { name: 'PBKDF2' },
-      false,
-      ['deriveKey']
-    );
-    
-    return await window.crypto.subtle.deriveKey(
-      { 
-        name: 'PBKDF2', 
-        salt: SALT, 
-        iterations: PBKDF2_ITERATIONS, 
-        hash: 'SHA-256' 
-      },
-      passKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-  } catch (error) {
-    console.error('Key derivation failed:', error);
-    throw new Error('Failed to derive encryption key');
-  }
+  const enc = new TextEncoder();
+  const passKey = await crypto.subtle.importKey(
+    'raw', enc.encode(pass),
+    { name: 'PBKDF2' }, false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: SALT, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    passKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
 }
 
-// Encryption/Decryption functions
-async function encryptData(data) {
+async function encryptPayload(payloadObj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const bytes = new TextEncoder().encode(JSON.stringify(payloadObj));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, encryptionKey, bytes);
+  return { iv: Array.from(iv), data: Array.from(new Uint8Array(ciphertext)) };
+}
+
+async function decryptPayload({ iv, data }) {
   try {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const ciphertext = await window.crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(iv) },
       encryptionKey,
-      encoded
+      new Uint8Array(data)
     );
-    return { iv, ciphertext };
-  } catch (error) {
-    console.error('Encryption failed:', error);
-    throw error;
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(plaintext)));
+  } catch (e) {
+    console.error('Decryption failed:', e);
+    return null;
   }
 }
 
-async function decryptData(iv, ciphertext) {
-  try {
-    const plaintext = await window.crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      encryptionKey,
-      ciphertext
-    );
-    return new Uint8Array(plaintext);
-  } catch (error) {
-    console.error('Decryption failed:', error);
-    throw error;
-  }
-}
-// WebRTC Connection Management
-async function startConnection() {
-  try {
-    const configuration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
-      ]
-    };
+function createPeerConnection(peerId) {
+  if (peerConnections.has(peerId)) return peerConnections.get(peerId);
 
-    peerConnection = new RTCPeerConnection(configuration);
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' }
+    ]
+  });
 
-    // Setup data channel
-    dataChannel = peerConnection.createDataChannel('chat', {
-      ordered: true,
-      maxPacketLifeTime: 3000
-    });
-
-    setupDataChannel();
-
-    // ICE Candidate handling
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate && remotePeerId) {
-        socket.emit('signal', { 
-          room, 
-          to: remotePeerId, 
-          data: { candidate: event.candidate } 
-        });
-      }
-    };
-
-    // Connection state monitoring
-    peerConnection.onconnectionstatechange = () => {
-      const state = peerConnection.connectionState;
-      console.log('Connection state:', state);
-      elements.statusText.innerText = `Status: ${state}`;
-      
-      if (state === 'connected') {
-        elements.statusText.innerText = 'Connected!';
-      } else if (state === 'failed') {
-        setTimeout(() => {
-          elements.statusText.innerText = 'Reconnecting...';
-          startConnection();
-        }, 2000);
-      }
-    };
-
-    // ICE Connection state
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log('ICE connection state:', peerConnection.iceConnectionState);
-    };
-
-    // Join the room
-    socket.emit('join-room', { room });
-
-    // Handle signaling
-    socket.on('peer-joined', ({ peerId: remoteId }) => {
-      console.log('Peer joined:', remoteId);
-      remotePeerId = remoteId;
-      createOffer();
-    });
-
-    socket.on('signal', async ({ from, data }) => {
-      remotePeerId = from;
-      
-      if (data.type === 'offer') {
-        await handleOffer(data);
-      } else if (data.type === 'answer') {
-        await handleAnswer(data);
-      } else if (data.candidate) {
-        try {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (e) {
-          console.error('Error adding ICE candidate:', e);
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Connection setup failed:', error);
-    throw error;
-  }
-}
-
-// WebRTC Offer/Answer handling
-async function createOffer() {
-  try {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('signal', { 
-      room, 
-      to: remotePeerId, 
-      data: offer 
-    });
-  } catch (error) {
-    console.error('Offer creation error:', error);
-    throw error;
-  }
-}
-
-async function handleOffer(offer) {
-  try {
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    socket.emit('signal', { 
-      room, 
-      to: remotePeerId, 
-      data: answer 
-    });
-  } catch (error) {
-    console.error('Offer handling error:', error);
-    throw error;
-  }
-}
-
-async function handleAnswer(answer) {
-  try {
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-  } catch (error) {
-    console.error('Answer handling error:', error);
-    throw error;
-  }
-}
-
-// Data Channel Management
-function setupDataChannel() {
-  dataChannel.onopen = () => {
-    console.log('Data channel opened');
-    elements.statusText.innerText = 'Connected!';
-  };
-
-  dataChannel.onclose = () => {
-    console.log('Data channel closed');
-    elements.statusText.innerText = 'Disconnected. Reconnecting...';
-    setTimeout(startConnection, 2000);
-  };
-
-  dataChannel.onmessage = handleMessage;
-  dataChannel.onerror = (error) => {
-    console.error('Data channel error:', error);
-  };
-
-  peerConnection.ondatachannel = (event) => {
-    console.log('Data channel received');
-    dataChannel = event.channel;
-    setupDataChannel();
-  };
-}
-
-// Message handling
-async function handleMessage(event) {
-  try {
-    const { iv, data, type, name } = JSON.parse(event.data);
-    const decrypted = await decryptData(new Uint8Array(iv), new Uint8Array(data));
-
-    if (type === 'text') {
-      const text = new TextDecoder().decode(decrypted);
-      addMessage(text, false);
-    } else if (type === 'file') {
-      const blob = new Blob([decrypted]);
-      const url = URL.createObjectURL(blob);
-      addFile(name, url, false);
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      socket.emit('signal', { room, to: peerId, data: { candidate: e.candidate } });
     }
-  } catch (error) {
-    console.error('Message handling error:', error);
+  };
+
+  pc.onconnectionstatechange = () => {
+    updateGlobalStatus();
+  };
+
+  pc.ondatachannel = (event) => {
+    setupDataChannel(peerId, event.channel);
+  };
+
+  peerConnections.set(peerId, pc);
+  return pc;
+}
+
+function setupDataChannel(peerId, channel) {
+  channel.binaryType = 'arraybuffer';
+  channel.onopen = () => { 
+    dataChannels.set(peerId, channel); 
+    updateGlobalStatus();
+  };
+  channel.onclose = () => { 
+    dataChannels.delete(peerId); 
+    updateGlobalStatus();
+  };
+  channel.onerror = (e) => console.error('DataChannel error:', e);
+
+  channel.onmessage = async (event) => {
+    try {
+      const envelope = JSON.parse(event.data);
+      const msg = await decryptPayload(envelope);
+      if (!msg) return;
+      switch (msg.kind) {
+        case 'text':
+          addMessage(msg.text, false, peerNames.get(peerId) || peerId);
+          break;
+        case 'file-meta':
+          ensureReceiverState(peerId, msg.fileId, msg.name, msg.size, msg.mime);
+          break;
+        case 'file-chunk':
+          appendChunk(peerId, msg.fileId, msg.seq, msg.chunk);
+          break;
+        case 'file-complete':
+          completeFile(peerId, msg.fileId);
+          break;
+        case 'system':
+          addSystem(msg.text);
+          break;
+      }
+    } catch (e) {
+      console.error('Failed to handle incoming message:', e);
+    }
+  };
+}
+
+function updateGlobalStatus() {
+  const connected = Array.from(peerConnections.values()).filter(pc => pc.connectionState === 'connected').length;
+  els.statusText.innerText = connected > 0 ? `${connected} peer${connected > 1 ? 's' : ''} connected` : 'No peers connected';
+  setOnlineDot(connected > 0);
+}
+
+socket.on('peers', async ({ peers }) => {
+  for (const { peerId, name } of peers) {
+    peerNames.set(peerId, name);
+    await connectToPeer(peerId, true);
+  }
+  updateGlobalStatus();
+});
+
+socket.on('peer-joined', async ({ peerId, name }) => {
+  peerNames.set(peerId, name);
+  addSystem(`${name} joined`);
+  await connectToPeer(peerId, false);
+  updateGlobalStatus();
+});
+
+socket.on('peer-left', ({ peerId, name }) => {
+  addSystem(`${name} left`);
+  cleanupPeer(peerId);
+  updateGlobalStatus();
+});
+
+socket.on('signal', async ({ from, data }) => {
+  const pc = createPeerConnection(from);
+
+  if (data.type === 'offer') {
+    await pc.setRemoteDescription(new RTCSessionDescription(data));
+    const ch = pc.createDataChannel('chat', { ordered: true });
+    setupDataChannel(from, ch);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('signal', { room, to: from, data: answer });
+  } else if (data.type === 'answer') {
+    await pc.setRemoteDescription(new RTCSessionDescription(data));
+  } else if (data.candidate) {
+    try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+    catch (e) { console.error('ICE add failed:', e); }
+  }
+});
+
+async function connectToPeer(peerId, initiator) {
+  const pc = createPeerConnection(peerId);
+  if (initiator) {
+    const ch = pc.createDataChannel('chat', { ordered: true });
+    setupDataChannel(peerId, ch);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('signal', { room, to: peerId, data: offer });
   }
 }
 
-// UI Event Handlers
-elements.joinBtn.onclick = async () => {
-  room = elements.roomInput.value.trim();
-  passphrase = elements.passInput.value.trim();
-  if (!room || !passphrase) return alert('Enter room and passphrase');
-  
-  elements.joinScreen.classList.add('hidden');
-  elements.app.classList.remove('hidden');
-  elements.statusText.innerText = 'Initializing encryption...';
-  
+/* ---------- File transfer (chunked) ---------- */
+const CHUNK_SIZE = 32 * 1024;
+const incomingFiles = new Map(); // `${peerId}:${fileId}` -> state
+
+function ensureReceiverState(peerId, fileId, name, size, mime) {
+  incomingFiles.set(`${peerId}:${fileId}`, { name, size, mime, chunks: [], received: 0 });
+}
+
+function appendChunk(peerId, fileId, seq, chunkArr) {
+  const key = `${peerId}:${fileId}`;
+  const st = incomingFiles.get(key); if (!st) return;
+  st.chunks[seq] = new Uint8Array(chunkArr);
+  st.received += st.chunks[seq].length;
+}
+
+function completeFile(peerId, fileId) {
+  const key = `${peerId}:${fileId}`;
+  const st = incomingFiles.get(key); if (!st) return;
+
+  const total = st.chunks.reduce((sum, c) => sum + (c?.length || 0), 0);
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of st.chunks) { if (!c) continue; buf.set(c, off); off += c.length; }
+  const blob = new Blob([buf], { type: st.mime || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+
+  addFile(st.name, url, false, peerNames.get(peerId) || peerId);
+  incomingFiles.delete(key);
+}
+
+async function sendTextToAll(text) {
+  const payload = await encryptPayload({ kind: 'text', text });
+  for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(payload));
+}
+
+async function sendSystemToAll(text) {
+  const payload = await encryptPayload({ kind: 'system', text });
+  for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(payload));
+}
+
+async function sendFileToAll(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const total = Math.ceil(bytes.length / CHUNK_SIZE);
+  const fileId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+
+  const meta = await encryptPayload({
+    kind: 'file-meta', fileId, name: file.name, size: bytes.length, mime: file.type, chunks: total
+  });
+  for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(meta));
+
+  for (let i = 0; i < total; i++) {
+    const part = await encryptPayload({
+      kind: 'file-chunk',
+      fileId,
+      seq: i,
+      chunk: Array.from(bytes.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, bytes.length)))
+    });
+    for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(part));
+  }
+
+  const done = await encryptPayload({ kind: 'file-complete', fileId });
+  for (const [, ch] of dataChannels) if (ch.readyState === 'open') ch.send(JSON.stringify(done));
+}
+
+/* ------------- UI handlers ------------- */
+els.joinBtn.onclick = async () => {
+  room = els.roomInput.value.trim();
+  displayName = els.nameInput.value.trim();
+  passphrase = els.passInput.value.trim();
+  if (!room || !displayName || !passphrase) return alert('Enter room, name and passphrase');
+
+  els.joinBtn.disabled = true;
+  els.statusText.innerText = 'Deriving key...';
   try {
-    // Show loading state
-    elements.joinBtn.disabled = true;
-    elements.joinBtn.textContent = 'Connecting...';
-    
     encryptionKey = await deriveKey(passphrase);
-    elements.statusText.innerText = 'Establishing connection...';
-    await startConnection();
-  } catch (error) {
-    console.error('Connection failed:', error);
-    elements.statusText.innerText = 'Connection failed. Please try again.';
-    elements.joinScreen.classList.remove('hidden');
-    elements.app.classList.add('hidden');
-    alert(`Connection error: ${error.message}`);
-  } finally {
-    elements.joinBtn.disabled = false;
-    elements.joinBtn.textContent = 'Join Room';
+    els.joinScreen.classList.add('hidden');
+    els.app.classList.remove('hidden');
+    els.statusText.innerText = 'Connecting...';
+    setOnlineDot(false);
+
+    socket.emit('join-room', { room, name: displayName });
+    addSystem(`Joined as ${displayName} • room ${room}`);
+  } catch (e) {
+    console.error(e);
+    alert('Failed to initialize encryption.');
+    els.joinBtn.disabled = false;
   }
 };
 
-elements.sendText.onclick = async () => {
-  const text = elements.textInput.value;
-  if (!text || !dataChannel || dataChannel.readyState !== 'open') return;
-  
-  try {
-    const { iv, ciphertext } = await encryptData(text);
-    dataChannel.send(JSON.stringify({ 
-      iv: [...iv], 
-      data: [...new Uint8Array(ciphertext)], 
-      type: 'text' 
-    }));
-    addMessage(text, true);
-    elements.textInput.value = '';
-  } catch (error) {
-    console.error('Error sending text:', error);
-    alert('Failed to send message. Please try again.');
-  }
+els.leaveBtn.onclick = () => {
+  socket.emit('leave-room', { room });
+  teardownAll('You left the room');
 };
 
-elements.sendFile.onclick = async () => {
-  const file = elements.fileInput.files[0];
-  if (!file || !dataChannel || dataChannel.readyState !== 'open') return;
+els.sendText.onclick = async () => {
+  const text = els.textInput.value.trim();
+  if (!text) return;
+  if (dataChannels.size === 0) return alert('No peers connected yet.');
 
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const { iv, ciphertext } = await encryptData(new Uint8Array(arrayBuffer));
-    dataChannel.send(JSON.stringify({ 
-      iv: [...iv], 
-      data: [...new Uint8Array(ciphertext)], 
-      type: 'file', 
-      name: file.name 
-    }));
-    addFile(file.name, URL.createObjectURL(file), true);
-    elements.fileInput.value = '';
-  } catch (error) {
-    console.error('Error sending file:', error);
-    alert('Failed to send file. Please try again.');
-  }
+  addMessage(text, true, displayName);
+  els.textInput.value = '';
+  await sendTextToAll(text);
 };
 
-// UI Helpers
-function addMessage(text, isMe) {
-  const msgDiv = document.createElement('div');
-  msgDiv.classList.add('message', isMe ? 'msg-me' : 'msg-other');
-  msgDiv.textContent = text;
-  elements.messages.appendChild(msgDiv);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+els.sendFile.onclick = async () => {
+  const file = els.fileInput.files[0];
+  if (!file) return alert('No file selected.');
+  if (dataChannels.size === 0) return alert('No peers connected yet.');
+
+  addFile(file.name, URL.createObjectURL(file), true, displayName);
+  await sendFileToAll(file);
+  els.fileInput.value = '';
+};
+
+/* ------------- helpers ------------- */
+function setOnlineDot(connected) {
+  if (!els.statusDot) return;
+  els.statusDot.classList.toggle('online', connected);
 }
 
-function addFile(name, url, isMe) {
-  const msgDiv = document.createElement('div');
-  msgDiv.classList.add('message', isMe ? 'msg-me' : 'msg-other');
-  const link = document.createElement('a');
-  link.href = url;
-  link.textContent = `📎 ${name}`;
-  link.classList.add('file-link');
-  link.download = name;
-  msgDiv.appendChild(link);
-  elements.messages.appendChild(msgDiv);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+function cleanupPeer(peerId) {
+  const ch = dataChannels.get(peerId);
+  if (ch) { try { ch.close(); } catch {} dataChannels.delete(peerId); }
+
+  const pc = peerConnections.get(peerId);
+  if (pc) { try { pc.close(); } catch {} peerConnections.delete(peerId); }
+
+  peerNames.delete(peerId);
+  updateGlobalStatus();
 }
 
-// Auto-reconnect if connection drops
+function teardownAll(reasonText) {
+  for (const peerId of [...peerConnections.keys()]) cleanupPeer(peerId);
+  encryptionKey = undefined;
+  addSystem(reasonText);
+  setTimeout(() => location.reload(), 250);
+}
+
+function addSystem(text) {
+  const div = document.createElement('div');
+  div.className = 'message msg-system';
+  div.innerHTML = `<em>${text}</em>`;
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+}
+
+function addMessage(text, isMe, who = '') {
+  const div = document.createElement('div');
+  div.className = `message ${isMe ? 'msg-me' : 'msg-other'}`;
+  div.innerHTML = who ? `<strong>${who}:</strong> ${escapeHtml(text)}` : escapeHtml(text);
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+}
+
+function addFile(name, url, isMe, who = '') {
+  const div = document.createElement('div');
+  div.className = `message ${isMe ? 'msg-me' : 'msg-other'}`;
+  const label = who ? `<strong>${who}:</strong> ` : '';
+  div.innerHTML = `${label}<a href="${url}" download="${name}">📎 ${escapeHtml(name)}</a>`;
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
 window.addEventListener('online', () => {
-  if (peerConnection && peerConnection.connectionState !== 'connected') {
-    elements.statusText.innerText = 'Reconnecting...';
-    startConnection();
-  }
+  if (room && displayName && passphrase) location.reload();
 });
