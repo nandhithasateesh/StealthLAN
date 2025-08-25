@@ -9,24 +9,31 @@ const socket = io(window.location.origin, { transports: ['websocket', 'polling']
 
 let room = '';
 let displayName = '';
+let roomName = '';
 let passphrase = '';
 let encryptionKey;
-
-// multi-peer maps
+let myPeerId = '';
+let myIsHost = false;
 const peerConnections = new Map();
 const dataChannels = new Map();
 const peerNames = new Map();
+const users = new Map();
+const pendingConnections = new Set();
 
 const PBKDF2_ITERATIONS = 50000;
 const SALT = new TextEncoder().encode('stealthlan-salt');
+const CHUNK_SIZE = 16 * 1024;
+const incomingFiles = new Map();
 
 const els = {
   joinScreen: document.getElementById('joinScreen'),
   app: document.getElementById('app'),
   statusText: document.getElementById('statusText'),
   roomInput: document.getElementById('roomInput'),
+  roomNameInput: document.getElementById('roomNameInput'),
   nameInput: document.getElementById('nameInput'),
   passInput: document.getElementById('passInput'),
+  createBtn: document.getElementById('createBtn'),
   joinBtn: document.getElementById('joinBtn'),
   leaveBtn: document.getElementById('leaveBtn'),
   messages: document.getElementById('messages'),
@@ -34,7 +41,9 @@ const els = {
   sendText: document.getElementById('sendText'),
   fileInput: document.getElementById('fileInput'),
   sendFile: document.getElementById('sendFile'),
-  statusDot: document.querySelector('.dot')
+  statusDot: document.querySelector('.dot'),
+roomNameDisplay: document.getElementById('roomNameDisplay'),
+userListUl: document.getElementById('userListUl')
 };
 
 async function deriveKey(pass) {
@@ -59,11 +68,7 @@ async function getPassphraseHash(pass) {
 }
 
 function toBinaryString(bytes) {
-  let str = '';
-  for (let i = 0; i < bytes.length; i++) {
-    str += String.fromCharCode(bytes[i]);
-  }
-  return str;
+  return String.fromCharCode(...bytes);
 }
 
 function toUint8Array(base64) {
@@ -80,20 +85,17 @@ async function encryptPayload(payloadObj) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const bytes = new TextEncoder().encode(JSON.stringify(payloadObj));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, encryptionKey, bytes);
-  const ctArr = new Uint8Array(ciphertext);
-  const ivBase64 = btoa(toBinaryString(iv));
-  const dataBase64 = btoa(toBinaryString(ctArr));
-  return { iv: ivBase64, data: dataBase64 };
+  return { iv: btoa(toBinaryString(iv)), data: btoa(toBinaryString(new Uint8Array(ciphertext))) };
 }
 
-async function decryptPayload(envelope) {
+async function decryptPayload({ iv, data }) {
   try {
-    const iv = toUint8Array(envelope.iv);
-    const data = toUint8Array(envelope.data);
+    const ivArr = toUint8Array(iv);
+    const dataArr = toUint8Array(data);
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv: ivArr },
       encryptionKey,
-      data
+      dataArr
     );
     return JSON.parse(new TextDecoder().decode(new Uint8Array(plaintext)));
   } catch (e) {
@@ -119,8 +121,15 @@ function createPeerConnection(peerId) {
     }
   };
 
-  pc.onconnectionstatechange = () => {
-    updateGlobalStatus();
+    pc.onconnectionstatechange = () => {
+    if (['failed', 'closed'].includes(pc.connectionState)) {
+      cleanupPeer(peerId);
+      pendingConnections.delete(peerId);
+      updateGlobalStatus();
+    } else if (pc.connectionState === 'connected') {
+      pendingConnections.delete(peerId);
+      updateGlobalStatus();
+    }
   };
 
   pc.ondatachannel = (event) => {
@@ -134,14 +143,21 @@ function createPeerConnection(peerId) {
 function setupDataChannel(peerId, channel) {
   channel.binaryType = 'arraybuffer';
   channel.onopen = () => { 
-    dataChannels.set(peerId, channel); 
-    updateGlobalStatus();
+    if (channel.readyState === 'open') {
+      dataChannels.set(peerId, channel); 
+      updateGlobalStatus();
+    }
   };
   channel.onclose = () => { 
     dataChannels.delete(peerId); 
     updateGlobalStatus();
   };
-  channel.onerror = (e) => console.error('DataChannel error:', e);
+  channel.onerror = (e) => {
+    console.warn('DataChannel error for peer', peerId, e);
+    if (e.error?.message?.includes('Close called')) {
+      cleanupPeer(peerId);
+    }
+  };
 
   channel.onmessage = async (event) => {
     try {
@@ -172,15 +188,54 @@ function setupDataChannel(peerId, channel) {
 }
 
 function updateGlobalStatus() {
-  const connected = Array.from(peerConnections.values()).filter(pc => pc.connectionState === 'connected').length;
-  els.statusText.innerText = connected > 0 ? `${connected} peer${connected > 1 ? 's' : ''} connected` : 'No peers connected';
+  const connected = Array.from(dataChannels.values()).filter(ch => ch.readyState === 'open').length;
+  if (pendingConnections.size > 0) {
+    els.statusText.innerText = 'Connecting to peers...';
+  } else {
+    els.statusText.innerText = connected > 0 ? `${connected} peer${connected > 1 ? 's' : ''} connected` : 'No peers connected';
+  }
   setOnlineDot(connected > 0);
 }
+
+function updateUserList() {
+  els.userListUl.innerHTML = '';
+  for (const [peerId, user] of users) {
+    const li = document.createElement('li');
+    li.textContent = `${user.name}${user.isHost ? ' (Host)' : ''}`;
+    if (myIsHost && !user.isHost && peerId !== myPeerId) {
+      const btn = document.createElement('button');
+      btn.className = 'kick-btn';
+      btn.textContent = 'Kick';
+      btn.dataset.peerId = peerId;
+      btn.onclick = () => {
+        socket.emit('kick-user', { room, peerId: btn.dataset.peerId });
+      };
+      li.appendChild(btn);
+    }
+    els.userListUl.appendChild(li);
+  }
+}
+
+socket.on('your-id', ({ peerId, roomName: receivedRoomName }) => {
+  myPeerId = peerId;
+  roomName = receivedRoomName || roomName || room;
+  if (els.roomNameDisplay) els.roomNameDisplay.innerText = roomName;
+});
+socket.on('user-list', ({ users: userArray }) => {
+  users.clear();
+  for (const u of userArray) {
+    users.set(u.peerId, { name: u.name, isHost: u.isHost });
+    peerNames.set(u.peerId, u.name);
+  }
+  myIsHost = users.get(myPeerId)?.isHost || false;
+  updateUserList();
+});
 
 socket.on('peers', async ({ peers }) => {
   for (const { peerId, name } of peers) {
     peerNames.set(peerId, name);
-    await connectToPeer(peerId, true);
+    pendingConnections.add(peerId);
+    await connectToPeer(peerId);
   }
   updateGlobalStatus();
 });
@@ -188,55 +243,52 @@ socket.on('peers', async ({ peers }) => {
 socket.on('peer-joined', async ({ peerId, name }) => {
   peerNames.set(peerId, name);
   addSystem(`${name} joined`);
-  await connectToPeer(peerId, false);
+  pendingConnections.add(peerId);
+  createPeerConnection(peerId);
   updateGlobalStatus();
 });
 
 socket.on('peer-left', ({ peerId, name }) => {
   addSystem(`${name} left`);
   cleanupPeer(peerId);
-  updateGlobalStatus();
 });
 
 socket.on('signal', async ({ from, data }) => {
   const pc = createPeerConnection(from);
-
-  if (data.type === 'offer') {
-    await pc.setRemoteDescription(new RTCSessionDescription(data));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit('signal', { room, to: from, data: answer });
-  } else if (data.type === 'answer') {
-    await pc.setRemoteDescription(new RTCSessionDescription(data));
-  } else if (data.candidate) {
-    try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-    catch (e) { console.error('ICE add failed:', e); }
+  try {
+    if (data.type === 'offer') {
+      await pc.setRemoteDescription(data);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('signal', { room, to: from, data: answer });
+    } else if (data.type === 'answer') {
+      await pc.setRemoteDescription(data);
+    } else if (data.candidate) {
+      await pc.addIceCandidate(data.candidate);
+    }
+  } catch (e) {
+    console.error('Signal handling error:', e);
   }
 });
 
-async function connectToPeer(peerId, initiator) {
+async function connectToPeer(peerId) {
   const pc = createPeerConnection(peerId);
-  if (initiator) {
-    const ch = pc.createDataChannel('chat', { ordered: true });
-    setupDataChannel(peerId, ch);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    socket.emit('signal', { room, to: peerId, data: offer });
-  }
+  const ch = pc.createDataChannel('chat', { ordered: true });
+  setupDataChannel(peerId, ch);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit('signal', { room, to: peerId, data: offer });
 }
 
 /* ---------- File transfer (chunked) ---------- */
-const CHUNK_SIZE = 16 * 1024;
-const incomingFiles = new Map(); // `${peerId}:${fileId}` -> state
-
 function ensureReceiverState(peerId, fileId, name, size, mime) {
   incomingFiles.set(`${peerId}:${fileId}`, { name, size, mime, chunks: [], received: 0 });
 }
 
-function appendChunk(peerId, fileId, seq, base64Chunk) {
+function appendChunk(peerId, fileId, seq, chunk) {
   const key = `${peerId}:${fileId}`;
   const st = incomingFiles.get(key); if (!st) return;
-  st.chunks[seq] = toUint8Array(base64Chunk);
+  st.chunks[seq] = toUint8Array(chunk);
   st.received += st.chunks[seq].length;
 }
 
@@ -292,38 +344,62 @@ async function sendFileToAll(file) {
 }
 
 /* ------------- UI handlers ------------- */
-els.joinBtn.onclick = async () => {
+async function handleEnterRoom(isCreate) {
   room = els.roomInput.value.trim();
   displayName = els.nameInput.value.trim();
+  roomName = isCreate ? els.roomNameInput.value.trim() : '';
   passphrase = els.passInput.value.trim();
-  if (!room || !displayName || !passphrase) return alert('Enter room, name and passphrase');
+  if (!room || !displayName || !passphrase || (isCreate && !roomName)) return alert('Enter all required fields');
 
+  els.createBtn.disabled = true;
   els.joinBtn.disabled = true;
   els.statusText.innerText = 'Deriving key...';
   try {
     encryptionKey = await deriveKey(passphrase);
     const passphraseHash = await getPassphraseHash(passphrase);
     els.joinScreen.classList.add('hidden');
-    els.app.classList.remove('hidden');
-    els.statusText.innerText = 'Connecting...';
+els.app.classList.remove('hidden');
+
+els.statusText.innerText = 'Connecting...';
     setOnlineDot(false);
 
-    socket.emit('join-room', { room, name: displayName, passphraseHash });
+    const event = isCreate ? 'create-room' : 'join-room';
+    socket.emit(event, { room, name: displayName, roomName, passphraseHash });
     addSystem(`Joined as ${displayName} • room ${room}`);
   } catch (e) {
     console.error(e);
     alert('Failed to initialize encryption.');
+    els.createBtn.disabled = false;
     els.joinBtn.disabled = false;
   }
 };
+
+els.createBtn.onclick = () => handleEnterRoom(true);
+els.joinBtn.onclick = () => handleEnterRoom(false);
+
+socket.on('create-error', (message) => {
+  alert(message);
+  els.app.classList.add('hidden');
+  els.joinScreen.classList.remove('hidden');
+  els.createBtn.disabled = false;
+  els.joinBtn.disabled = false;
+  els.messages.innerHTML = '';
+  els.statusText.innerText = 'No peers connected';
+});
 
 socket.on('join-error', (message) => {
   alert(message);
   els.app.classList.add('hidden');
   els.joinScreen.classList.remove('hidden');
+  els.createBtn.disabled = false;
   els.joinBtn.disabled = false;
   els.messages.innerHTML = '';
   els.statusText.innerText = 'No peers connected';
+});
+
+socket.on('kicked', (message) => {
+  alert(message);
+  teardownAll(message);
 });
 
 els.leaveBtn.onclick = () => {
@@ -365,12 +441,20 @@ function cleanupPeer(peerId) {
   if (pc) { try { pc.close(); } catch {} peerConnections.delete(peerId); }
 
   peerNames.delete(peerId);
+  users.delete(peerId);
+  pendingConnections.delete(peerId);
+  updateUserList();
   updateGlobalStatus();
 }
 
 function teardownAll(reasonText) {
   for (const peerId of [...peerConnections.keys()]) cleanupPeer(peerId);
   encryptionKey = undefined;
+  myPeerId = '';
+  myIsHost = false;
+  users.clear();
+  pendingConnections.clear();
+  updateUserList();
   addSystem(reasonText);
   setTimeout(() => location.reload(), 250);
 }

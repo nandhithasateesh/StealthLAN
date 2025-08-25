@@ -55,10 +55,18 @@ html,body{height:100%;margin:0;background:
 
 /* CHAT TOP */
 .chat-top{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px dashed rgba(255,255,255,0.02)}
+.room-name { font-size: 16px; font-weight: 600; color: var(--accent); text-align: center; padding: 10px 0; }
 .peer-info{display:flex;align-items:center;gap:10px}
 .dot{width:12px;height:12px;border-radius:50%;background:#7a8697}
 .dot.online{background:linear-gradient(90deg,var(--accent),#b3fff0);box-shadow:0 6px 18px rgba(0,245,212,0.16)}
 .peer-name{font-weight:600;color:#cfeeff}
+
+/* USER LIST */
+.user-list { padding: 10px; background: rgba(255,255,255,0.02); border-radius: 10px; margin-bottom: 10px; }
+.user-list h4 { margin: 0 0 5px; font-size: 14px; color: var(--muted); }
+.user-list ul { list-style: none; padding: 0; margin: 0; }
+.user-list li { display: flex; align-items: center; margin-bottom: 5px; font-size: 13px; }
+.user-list .kick-btn { margin-left: auto; padding: 2px 6px; font-size: 12px; background: red; color: white; border: none; border-radius: 4px; cursor: pointer; }
 
 /* MESSAGES AREA */
 .messages{flex:1;padding:12px;overflow:auto;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:10px;margin:14px 0}
@@ -78,6 +86,7 @@ html,body{height:100%;margin:0;background:
 /* small controls */
 .small-controls{display:flex;align-items:center;justify-content:space-between;padding-top:10px}
 .notes{color:#90a9c9;font-size:12px}
+
 
 /* animations */
 @keyframes fadeInUp { from {opacity:0; transform:translateY(6px)} to {opacity:1; transform:translateY(0)} }

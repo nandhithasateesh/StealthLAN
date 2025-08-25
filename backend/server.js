@@ -21,7 +21,7 @@ const io = new Server(server, {
 });
 
 /**
- * rooms: Map<roomId, {hash: string, members: Map<socketId, { name: string }>>}
+ * rooms: Map<roomId, {hash: string, roomName: string, host: string, members: Map<socketId, { name: string }>>}
  */
 const rooms = new Map();
 
@@ -29,6 +29,49 @@ io.on('connection', (socket) => {
   console.log(`⚡ client connected: ${socket.id}`);
   socket.data.room = null;
   socket.data.name = null;
+
+  // Create a room with a display name and passphrase hash
+  socket.on('create-room', (data) => {
+    const { room, name, roomName, passphraseHash } = data;
+    if (!room || !name || !roomName || !passphraseHash) return;
+
+    // leave previous room if any
+    if (socket.data.room) {
+      leaveCurrentRoom(socket);
+    }
+
+    if (rooms.has(room)) {
+      return socket.emit('create-error', 'Room with this id already exists. Please use a different id.');
+    }
+
+    rooms.set(room, { hash: passphraseHash, roomName, host: socket.id, members: new Map() });
+
+    socket.join(room);
+socket.data.room = room;
+socket.data.name = name;
+
+const members = rooms.get(room).members;
+members.set(socket.id, { name });
+
+socket.emit('your-id', { peerId: socket.id, roomName });
+    // socket.join(room);
+    // socket.data.room = room;
+    // socket.data.name = name;
+
+    // const members = rooms.get(room).members;
+    // members.set(socket.id, { name });
+
+    // socket.emit('your-id', { peerId: socket.id });
+
+    socket.emit('peers', { peers: [] });
+
+    const userList = Array.from(members.entries())
+      .map(([peerId, meta]) => ({ peerId, name: meta.name, isHost: peerId === rooms.get(room).host }));
+
+    io.to(room).emit('user-list', { users: userList });
+
+    console.log(`➡️  ${socket.id} (${name}) created and joined room "${room}"`);
+  });
 
   // Join a room with a display name and passphrase hash
   socket.on('join-room', (data) => {
@@ -40,12 +83,12 @@ io.on('connection', (socket) => {
       leaveCurrentRoom(socket);
     }
 
-    if (rooms.has(room)) {
-      if (rooms.get(room).hash !== passphraseHash) {
-        return socket.emit('join-error', 'Room name already exists. Please use a different room name or enter the correct passphrase.');
-      }
-    } else {
-      rooms.set(room, { hash: passphraseHash, members: new Map() });
+    if (!rooms.has(room)) {
+      return socket.emit('join-error', 'Room does not exist.');
+    }
+
+    if (rooms.get(room).hash !== passphraseHash) {
+      return socket.emit('join-error', 'Incorrect passphrase.');
     }
 
     socket.join(room);
@@ -54,6 +97,8 @@ io.on('connection', (socket) => {
 
     const members = rooms.get(room).members;
     members.set(socket.id, { name });
+
+    socket.emit('your-id', { peerId: socket.id, roomName: rooms.get(room).roomName });
 
     // Send existing peers to the newcomer (excluding themselves)
     const peers = Array.from(members.entries())
@@ -64,6 +109,11 @@ io.on('connection', (socket) => {
 
     // Notify others that this peer joined
     socket.to(room).emit('peer-joined', { peerId: socket.id, name });
+
+    const userList = Array.from(members.entries())
+      .map(([peerId, meta]) => ({ peerId, name: meta.name, isHost: peerId === rooms.get(room).host }));
+
+    io.to(room).emit('user-list', { users: userList });
 
     console.log(`➡️  ${socket.id} (${name}) joined room "${room}"`);
   });
@@ -81,6 +131,24 @@ io.on('connection', (socket) => {
     // Optional debug:
     // console.log(`🔁 signal ${data.type || 'candidate'}: ${socket.id} -> ${to} @ ${room}`);
   });
+
+  // Kick user (only host)
+  socket.on('kick-user', ({ room, peerId }) => {
+  if (!room || !peerId) return;
+  if (socket.data.room !== room) return;
+
+  const roomData = rooms.get(room);
+  if (!roomData || socket.id !== roomData.host) return; // Only host can kick
+
+  const targetSocket = io.sockets.sockets.get(peerId);
+  if (targetSocket && roomData.members.has(peerId)) {
+    const targetName = roomData.members.get(peerId).name;
+    const hostName = roomData.members.get(socket.id).name;
+    leaveCurrentRoom(targetSocket);
+    targetSocket.emit('kicked', 'You were kicked from the room by the host');
+    io.to(room).emit('system-message', { text: `${targetName} was kicked by the host (${hostName})` });
+  }
+});
 
   // Explicit leave (button)
   socket.on('leave-room', () => {
@@ -103,7 +171,12 @@ function leaveCurrentRoom(socket, { disconnecting = false } = {}) {
   const roomData = rooms.get(room);
   if (roomData) {
     roomData.members.delete(socket.id);
-    if (roomData.members.size === 0) rooms.delete(room);
+    if (socket.id === roomData.host && roomData.members.size > 0) {
+      roomData.host = roomData.members.keys().next().value;
+    } else if (roomData.members.size === 0) {
+      rooms.delete(room);
+      return;
+    }
   }
 
   socket.leave(room);
@@ -112,6 +185,11 @@ function leaveCurrentRoom(socket, { disconnecting = false } = {}) {
   // Tell others this peer left
   socket.to(room).emit('peer-left', { peerId: socket.id, name });
   console.log(`⬅️  ${socket.id} (${name}) left room "${room}"${disconnecting ? ' (disconnect)' : ''}`);
+
+  const userList = Array.from(roomData.members.entries())
+    .map(([peerId, meta]) => ({ peerId, name: meta.name, isHost: peerId === roomData.host }));
+
+  io.to(room).emit('user-list', { users: userList });
 }
 
 const PORT = process.env.PORT || 5001;

@@ -23,15 +23,20 @@
           <input id="roomInput" placeholder="e.g. hostel-21" />
         </label>
 
+        <label>Room Name (for creating room)
+          <input id="roomNameInput" placeholder="e.g. Hostel Chat" />
+        </label>
+
         <label>Passphrase
           <input id="passInput" type="password" placeholder="share securely" />
         </label>
 
-        <label>Name
+        <label>Your Name
           <input id="nameInput" placeholder="e.g. Alex" />
         </label>
 
         <div class="row">
+          <button id="createBtn" class="btn primary">Create Room</button>
           <button id="joinBtn" class="btn primary">Join Room</button>
         </div>
 
@@ -45,6 +50,7 @@
 
     <!-- CHAT SCREEN -->
     <div id="app" class="chat-panel hidden glass">
+      <div class="room-name" id="roomNameDisplay"></div>
       <div class="chat-top">
         <div class="peer-info">
           <div class="dot"></div>
@@ -53,6 +59,11 @@
         <div class="actions">
           <button id="leaveBtn" class="btn ghost">Leave</button>
         </div>
+      </div>
+
+      <div class="user-list">
+        <h4>Users in Room</h4>
+        <ul id="userListUl"></ul>
       </div>
 
       <div id="messages" class="messages"></div>
