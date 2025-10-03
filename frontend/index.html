@@ -7,81 +7,325 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="page">
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">SL</div>
+      <span class="nav-title">StealthLAN</span>
+    </div>
+    <div class="nav-actions">
+      <button id="dashboardBtn" class="nav-btn active" title="Dashboard">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Dashboard</span>
+      </button>
+      <button id="settingsBtn" class="nav-btn" title="Settings">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">Settings</span>
+      </button>
+      <button id="helpBtn" class="nav-btn" title="Help">
+        <span class="nav-icon">❓</span>
+        <span class="nav-label">Help</span>
+      </button>
+    </div>
+  </nav>
 
-    <!-- JOIN SCREEN -->
-    <div id="joinScreen" class="join-panel glass">
-      <div class="brand">
-        <div class="logo">SL</div>
-        <div class="title">StealthLAN</div>
-      </div>
-
-      <p class="tag">Private, local, encrypted chat — no cloud, no traces.</p>
-
-      <div class="form">
-        <label>Room ID
-          <input id="roomInput" placeholder="e.g. hostel-21" />
-        </label>
-
-        <label>Room Name (for creating room)
-          <input id="roomNameInput" placeholder="e.g. Hostel Chat" />
-        </label>
-
-        <label>Passphrase
-          <input id="passInput" type="password" placeholder="share securely" />
-        </label>
-
-        <label>Your Name
-          <input id="nameInput" placeholder="e.g. Alex" />
-        </label>
-
-        <div class="row">
-          <button id="createBtn" class="btn primary">Create Room</button>
-          <button id="joinBtn" class="btn primary">Join Room</button>
+  <!-- Dashboard Modal Overlay -->
+  <div id="dashboardOverlay" class="dashboard-overlay">
+    <div class="dashboard-modal">
+      <div class="dashboard-header">
+        <div class="dashboard-title">
+          📊 Dashboard
         </div>
-
-        <div class="hint">Use same passphrase on all devices. Messages vanish on close.</div>
+        <button id="dashboardClose" class="dashboard-close">×</button>
       </div>
-
-      <div class="footer">
-        <small>Local-only • E2E AES-GCM • Files & Text</small>
+      
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="connectedPeers">0</div>
+          <div class="stat-label">Connected Peers</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="messagesCount">0</div>
+          <div class="stat-label">Messages Sent</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="filesShared">0</div>
+          <div class="stat-label">Files Shared</div>
+        </div>
+      </div>
+      
+      <div class="connection-status">
+        <h4>Connection Status</h4>
+        <div class="status-indicator">
+          <div class="status-dot" id="connectionDot"></div>
+          <span id="connectionStatus">Disconnected</span>
+        </div>
+      </div>
+      
+      <div class="room-info" id="roomInfoSection" style="display: none;">
+        <h4>Room Information</h4>
+        <div class="info-item">
+          <strong>Room ID:</strong> <span id="currentRoomId">-</span>
+        </div>
+        <div class="info-item">
+          <strong>Room Name:</strong> <span id="currentRoomName">-</span>
+        </div>
+        <div class="info-item">
+          <strong>Your Name:</strong> <span id="currentUserName">-</span>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- CHAT SCREEN -->
-    <div id="app" class="chat-panel hidden glass">
-      <div class="room-name" id="roomNameDisplay"></div>
-      <div class="chat-top">
-        <div class="peer-info">
-          <div class="dot"></div>
-          <div class="peer-name"><span id="statusText">No peers connected</span></div>
+  <!-- Settings Modal Overlay -->
+  <div id="settingsOverlay" class="settings-overlay">
+    <div class="settings-modal">
+      <div class="settings-header">
+        <div class="settings-title">
+          ⚙️ Settings
         </div>
-        <div class="actions">
-          <button id="leaveBtn" class="btn ghost">Leave</button>
+        <button id="settingsClose" class="settings-close">×</button>
+      </div>
+      
+      <div class="settings-content">
+        <div class="setting-group">
+          <h4>Appearance</h4>
+          <label class="setting-item">
+            <input type="checkbox" id="darkModeToggle" checked>
+            <span class="setting-text">Dark Mode</span>
+            <div class="setting-description">Use dark theme for better night viewing</div>
+          </label>
+          <label class="setting-item">
+            <input type="checkbox" id="soundNotifications" checked>
+            <span class="setting-text">Sound Notifications</span>
+            <div class="setting-description">Play sound when receiving messages</div>
+          </label>
         </div>
-      </div>
 
-      <div class="user-list">
-        <h4>Users in Room</h4>
-        <ul id="userListUl"></ul>
-      </div>
+        <div class="setting-group">
+          <h4>Privacy</h4>
+          <label class="setting-item">
+            <input type="checkbox" id="showTypingIndicator" checked>
+            <span class="setting-text">Show Typing Indicator</span>
+            <div class="setting-description">Let others know when you're typing</div>
+          </label>
+        </div>
 
-      <div id="messages" class="messages"></div>
+        <div class="setting-group">
+          <h4>Connection</h4>
+          <label class="setting-item">
+            <input type="checkbox" id="autoReconnect" checked>
+            <span class="setting-text">Auto Reconnect</span>
+            <div class="setting-description">Automatically reconnect when connection is lost</div>
+          </label>
+        </div>
 
-      <div class="composer">
-        <input id="textInput" placeholder="Type a secure message..." autocomplete="off" />
-        <label class="file-attach" title="Attach a file">
-          <input id="fileInput" type="file" />
-          📎
-        </label>
-        <button id="sendText" class="btn circle" title="Send">➤</button>
-      </div>
+        <div class="setting-group">
+          <h4>Security Information</h4>
+          <div class="security-info">
+            <div class="security-item">
+              <span class="security-icon">🔒</span>
+              <div class="security-details">
+                <strong>End-to-End Encryption</strong>
+                <div>AES-GCM 256-bit encryption</div>
+              </div>
+            </div>
+            <div class="security-item">
+              <span class="security-icon">🔑</span>
+              <div class="security-details">
+                <strong>Key Derivation</strong>
+                <div>PBKDF2 with 50,000 iterations</div>
+              </div>
+            </div>
+            <div class="security-item">
+              <span class="security-icon">🌐</span>
+              <div class="security-details">
+                <strong>Network</strong>
+                <div>Local network only, no cloud storage</div>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <div class="small-controls">
-        <button id="sendFile" class="btn subtle">Send File</button>
+        <div class="settings-actions">
+          <button id="resetSettings" class="btn ghost">Reset to Defaults</button>
+          <button id="exportSettings" class="btn subtle">Export Settings</button>
+        </div>
       </div>
     </div>
+  </div>
 
+  <!-- Help Modal Overlay -->
+  <div id="helpOverlay" class="help-overlay">
+    <div class="help-modal">
+      <div class="help-header">
+        <div class="help-title">
+          ❓ Help & FAQ
+        </div>
+        <button id="helpClose" class="help-close">×</button>
+      </div>
+      
+      <div class="help-content">
+        <div class="help-section">
+          <h4>Getting Started</h4>
+          <div class="faq-item">
+            <div class="faq-question">How do I create a room?</div>
+            <div class="faq-answer">Enter a Room ID, Room Name, Your Name, and Passphrase, then click "Create Room". Share the Room ID and Passphrase with others to let them join.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">How do I join an existing room?</div>
+            <div class="faq-answer">Get the Room ID and Passphrase from the room creator, enter your name, then click "Join Room". You'll be connected to the secure chat.</div>
+          </div>
+        </div>
+
+        <div class="help-section">
+          <h4>Messaging</h4>
+          <div class="faq-item">
+            <div class="faq-question">How do I send messages?</div>
+            <div class="faq-answer">Type your message in the input field at the bottom and press Enter or click the send button (➤). Messages are encrypted end-to-end.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">Can I send files?</div>
+            <div class="faq-answer">Yes! Click the paperclip icon (📎) next to the message input to select and send files. Files are also encrypted during transfer.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">What are typing indicators?</div>
+            <div class="faq-answer">When someone is typing, you'll see animated dots with their name. You can disable this in Settings if you prefer privacy.</div>
+          </div>
+        </div>
+
+        <div class="help-section">
+          <h4>Security & Privacy</h4>
+          <div class="faq-item">
+            <div class="faq-question">Is my chat secure?</div>
+            <div class="faq-answer">Yes! All messages and files are encrypted with AES-GCM 256-bit encryption. Only people with the correct passphrase can decrypt your messages.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">Are messages stored anywhere?</div>
+            <div class="faq-answer">No! Messages only exist in your browser and are automatically deleted when you leave the room. Nothing is stored on servers or in the cloud.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">What happens if I lose connection?</div>
+            <div class="faq-answer">The app will automatically try to reconnect you to the room. Your chat history will be cleared for security when you leave or reconnect.</div>
+          </div>
+        </div>
+
+        <div class="help-section">
+          <h4>Troubleshooting</h4>
+          <div class="faq-item">
+            <div class="faq-question">I can't connect to a room</div>
+            <div class="faq-answer">Make sure you have the correct Room ID and Passphrase. Check your internet connection and try refreshing the page if needed.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">Messages aren't sending</div>
+            <div class="faq-answer">Check if you're connected (green dot in status). If reconnecting, wait for the connection to be fully established before sending messages.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">No sound notifications</div>
+            <div class="faq-answer">Check that Sound Notifications are enabled in Settings. Some browsers require user interaction before playing sounds.</div>
+          </div>
+        </div>
+
+        <div class="help-section">
+          <h4>Features</h4>
+          <div class="faq-item">
+            <div class="faq-question">What's in the Dashboard?</div>
+            <div class="faq-answer">Click the 📊 icon to see connection stats, message counts, and room information. It shows real-time data about your session.</div>
+          </div>
+          <div class="faq-item">
+            <div class="faq-question">How do I change settings?</div>
+            <div class="faq-answer">Click the ⚙️ icon to access settings for dark/light mode, sound notifications, typing indicators, and auto-reconnect options.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <main class="main-content">
+      <div class="page">
+        <!-- JOIN SCREEN -->
+        <div id="joinScreen" class="join-panel glass">
+          <div class="brand">
+            <div class="logo">SL</div>
+            <div class="title">StealthLAN</div>
+          </div>
+
+          <p class="tag">Private, local, encrypted chat — no cloud, no traces.</p>
+
+          <div class="form">
+            <label>Room ID
+              <input id="roomInput" placeholder="e.g. hostel-21" />
+            </label>
+
+            <label>Room Name (for creating room)
+              <input id="roomNameInput" placeholder="e.g. Hostel Chat" />
+            </label>
+
+            <label>Passphrase
+              <input id="passInput" type="password" placeholder="share securely" />
+            </label>
+
+            <label>Your Name
+              <input id="nameInput" placeholder="e.g. Alex" />
+            </label>
+
+            <div class="row">
+              <button id="createBtn" class="btn primary">Create Room</button>
+              <button id="joinBtn" class="btn primary">Join Room</button>
+            </div>
+
+            <div class="hint">Use same passphrase on all devices. Messages vanish on close.</div>
+          </div>
+
+          <div class="footer">
+            <small>Local-only • E2E AES-GCM • Files & Text</small>
+          </div>
+        </div>
+
+        <!-- CHAT SCREEN -->
+        <div id="app" class="chat-panel hidden glass">
+          <div class="room-name" id="roomNameDisplay"></div>
+          <div class="chat-top">
+            <div class="peer-info">
+              <div class="dot"></div>
+              <div class="peer-name"><span id="statusText">No peers connected</span></div>
+            </div>
+            <div class="actions">
+              <button id="leaveBtn" class="btn ghost">Leave</button>
+            </div>
+          </div>
+
+          <div class="user-list">
+            <h4>Users in Room</h4>
+            <ul id="userListUl"></ul>
+          </div>
+
+          <div id="messages" class="messages"></div>
+
+          <div id="typingIndicator" class="typing-indicator">
+            <span id="typingText">Someone is typing</span>
+            <div class="typing-dots">
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <input id="textInput" placeholder="Type a secure message..." autocomplete="off" />
+            <label class="file-attach" title="Attach a file">
+              <input id="fileInput" type="file" />
+              📎
+            </label>
+            <button id="sendText" class="btn circle" title="Send">➤</button>
+          </div>
+
+          <div class="small-controls">
+            <button id="sendFile" class="btn subtle">Send File</button>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <!-- socket.io + app script -->

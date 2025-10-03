@@ -42,9 +42,217 @@ const els = {
   fileInput: document.getElementById('fileInput'),
   sendFile: document.getElementById('sendFile'),
   statusDot: document.querySelector('.dot'),
-roomNameDisplay: document.getElementById('roomNameDisplay'),
-userListUl: document.getElementById('userListUl')
+  roomNameDisplay: document.getElementById('roomNameDisplay'),
+  userListUl: document.getElementById('userListUl'),
+  typingIndicator: document.getElementById('typingIndicator'),
+  typingText: document.getElementById('typingText'),
+  // Navigation elements
+  dashboardBtn: document.getElementById('dashboardBtn'),
+  settingsBtn: document.getElementById('settingsBtn'),
+  helpBtn: document.getElementById('helpBtn'),
+  dashboardOverlay: document.getElementById('dashboardOverlay'),
+  dashboardClose: document.getElementById('dashboardClose'),
+  settingsOverlay: document.getElementById('settingsOverlay'),
+  settingsClose: document.getElementById('settingsClose'),
+  helpOverlay: document.getElementById('helpOverlay'),
+  helpClose: document.getElementById('helpClose'),
+  // Dashboard elements
+  connectedPeers: document.getElementById('connectedPeers'),
+  messagesCount: document.getElementById('messagesCount'),
+  filesShared: document.getElementById('filesShared'),
+  connectionDot: document.getElementById('connectionDot'),
+  connectionStatus: document.getElementById('connectionStatus'),
+  roomInfoSection: document.getElementById('roomInfoSection'),
+  currentRoomId: document.getElementById('currentRoomId'),
+  currentRoomName: document.getElementById('currentRoomName'),
+  currentUserName: document.getElementById('currentUserName'),
+  // Settings elements
+  darkModeToggle: document.getElementById('darkModeToggle'),
+  soundNotifications: document.getElementById('soundNotifications'),
+  showTypingIndicator: document.getElementById('showTypingIndicator'),
+  autoReconnect: document.getElementById('autoReconnect'),
+  resetSettings: document.getElementById('resetSettings'),
+  exportSettings: document.getElementById('exportSettings')
 };
+
+// Dashboard stats
+let stats = {
+  messagesCount: 0,
+  filesShared: 0
+};
+
+// Settings state
+let appSettings = {
+  darkMode: true,
+  soundNotifications: true,
+  showTypingIndicator: true,
+  autoReconnect: true
+};
+
+// Typing indicator state
+let typingUsers = new Set();
+let typingTimeout = null;
+let isTyping = false;
+
+// Global audio context for better performance and sync
+let globalAudioContext = null;
+
+// Initialize audio context on first user interaction
+function initializeAudioContext() {
+  if (!globalAudioContext) {
+    try {
+      globalAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Resume context if it's suspended (browser policy)
+      if (globalAudioContext.state === 'suspended') {
+        globalAudioContext.resume();
+      }
+    } catch (e) {
+      console.log('Audio context initialization failed');
+    }
+  }
+  return globalAudioContext;
+}
+
+// Sound notification function
+function playNotificationSound() {
+  if (!appSettings.soundNotifications) return;
+  
+  try {
+    // Use global audio context for better sync
+    const audioContext = initializeAudioContext();
+    if (!audioContext || audioContext.state === 'closed') return;
+    
+    // Resume if suspended
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        playActualSound(audioContext);
+      });
+    } else {
+      playActualSound(audioContext);
+    }
+    
+  } catch (e) {
+    console.log('Sound notification not available');
+  }
+}
+
+// Separate function for actual sound generation
+function playActualSound(audioContext) {
+  try {
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    // Create a pleasant notification sound
+    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+    oscillator.frequency.linearRampToValueAtTime(600, audioContext.currentTime + 0.1);
+    
+    // Set volume and fade out - more aggressive initial volume for better sync
+    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.15);
+    
+    // Start and stop the oscillator
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.15);
+    
+  } catch (e) {
+    console.log('Sound generation failed');
+  }
+}
+// Typing indicator functions
+async function sendTypingIndicator(isTypingNow) {
+  if (!appSettings.showTypingIndicator) return;
+  
+  const message = {
+    kind: 'typing',
+    isTyping: isTypingNow,
+    userId: myPeerId,
+    userName: displayName
+  };
+  
+  try {
+    // Use existing encryption method like other messages
+    const payload = await encryptPayload(message);
+    
+    // Send to all connected peers
+    for (const [peerId, channel] of dataChannels) {
+      if (channel.readyState === 'open') {
+        try {
+          channel.send(JSON.stringify(payload));
+        } catch (e) {
+          console.log('Failed to send typing indicator to', peerId);
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Failed to encrypt typing indicator:', e);
+  }
+}
+
+function handleTypingIndicator(peerId, userName, isTypingNow) {
+  if (!appSettings.showTypingIndicator) return;
+  
+  if (isTypingNow) {
+    typingUsers.add(`${userName}`);
+  } else {
+    typingUsers.delete(`${userName}`);
+  }
+  
+  updateTypingDisplay();
+}
+
+function updateTypingDisplay() {
+  if (typingUsers.size === 0) {
+    els.typingIndicator.classList.remove('active');
+    return;
+  }
+  
+  const typingArray = Array.from(typingUsers);
+  let text;
+  
+  if (typingArray.length === 1) {
+    text = `${typingArray[0]} is typing`;
+  } else if (typingArray.length === 2) {
+    text = `${typingArray[0]} and ${typingArray[1]} are typing`;
+  } else {
+    text = `${typingArray.length} people are typing`;
+  }
+  
+  els.typingText.textContent = text;
+  els.typingIndicator.classList.add('active');
+}
+
+function startTyping() {
+  if (!isTyping) {
+    isTyping = true;
+    sendTypingIndicator(true);
+  }
+  
+  // Clear existing timeout
+  if (typingTimeout) {
+    clearTimeout(typingTimeout);
+  }
+  
+  // Stop typing after 2 seconds of inactivity
+  typingTimeout = setTimeout(() => {
+    stopTyping();
+  }, 2000);
+}
+
+function stopTyping() {
+  if (isTyping) {
+    isTyping = false;
+    sendTypingIndicator(false);
+  }
+  
+  if (typingTimeout) {
+    clearTimeout(typingTimeout);
+    typingTimeout = null;
+  }
+}
 
 async function deriveKey(pass) {
   const enc = new TextEncoder();
@@ -180,6 +388,9 @@ function setupDataChannel(peerId, channel) {
         case 'system':
           addSystem(msg.text);
           break;
+        case 'typing':
+          handleTypingIndicator(peerId, msg.userName || peerNames.get(peerId) || peerId, msg.isTyping);
+          break;
       }
     } catch (e) {
       console.error('Failed to handle incoming message:', e);
@@ -195,6 +406,9 @@ function updateGlobalStatus() {
     els.statusText.innerText = connected > 0 ? `${connected} peer${connected > 1 ? 's' : ''} connected` : 'No peers connected';
   }
   setOnlineDot(connected > 0);
+  
+  // Update dashboard stats in real-time
+  updateDashboardStats();
 }
 
 function updateUserList() {
@@ -366,6 +580,9 @@ els.statusText.innerText = 'Connecting...';
     const event = isCreate ? 'create-room' : 'join-room';
     socket.emit(event, { room, name: displayName, roomName, passphraseHash });
     addSystem(`Joined as ${displayName} • room ${room}`);
+    
+    // Update dashboard room info
+    updateRoomInfo();
   } catch (e) {
     console.error(e);
     alert('Failed to initialize encryption.');
@@ -374,8 +591,62 @@ els.statusText.innerText = 'Connecting...';
   }
 };
 
-els.createBtn.onclick = () => handleEnterRoom(true);
-els.joinBtn.onclick = () => handleEnterRoom(false);
+els.createBtn.onclick = () => {
+  // Initialize audio context on first user interaction
+  initializeAudioContext();
+  handleEnterRoom(true);
+};
+
+els.joinBtn.onclick = () => {
+  // Initialize audio context on first user interaction
+  initializeAudioContext();
+  handleEnterRoom(false);
+};
+
+// Typing indicator event listeners
+els.textInput.addEventListener('input', () => {
+  if (els.textInput.value.trim().length > 0) {
+    startTyping();
+  } else {
+    stopTyping();
+  }
+});
+
+els.textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault(); // Prevent form submission
+    originalSendMessage(); // Send the message
+    return;
+  }
+  
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    if (els.textInput.value.trim().length <= 1) {
+      stopTyping();
+    } else {
+      startTyping();
+    }
+  }
+});
+
+// Stop typing when message is sent
+const originalSendMessage = async () => {
+  const text = els.textInput.value.trim();
+  if (!text || !encryptionKey) return;
+  
+  // Stop typing indicator
+  stopTyping();
+  
+  // Send message (existing functionality)
+  const msg = { kind: 'text', text };
+  const payload = await encryptPayload(msg);
+  for (const ch of dataChannels.values()) {
+    if (ch.readyState === 'open') ch.send(JSON.stringify(payload));
+  }
+  addMessage(text, true);
+  els.textInput.value = '';
+};
+
+els.sendText.onclick = originalSendMessage;
 
 socket.on('create-error', (message) => {
   alert(message);
@@ -432,17 +703,21 @@ function setOnlineDot(connected) {
   if (!els.statusDot) return;
   els.statusDot.classList.toggle('online', connected);
 }
-
 function cleanupPeer(peerId) {
-  const ch = dataChannels.get(peerId);
-  if (ch) { try { ch.close(); } catch {} dataChannels.delete(peerId); }
-
-  const pc = peerConnections.get(peerId);
-  if (pc) { try { pc.close(); } catch {} peerConnections.delete(peerId); }
-
-  peerNames.delete(peerId);
-  users.delete(peerId);
+  peerConnections.get(peerId)?.close();
+  dataChannels.get(peerId)?.close();
+  peerConnections.delete(peerId);
+  dataChannels.delete(peerId);
   pendingConnections.delete(peerId);
+  
+  // Clean up typing indicator for this user
+  const userName = peerNames.get(peerId);
+  if (userName) {
+    typingUsers.delete(userName);
+    updateTypingDisplay();
+  }
+  
+  users.delete(peerId);
   updateUserList();
   updateGlobalStatus();
 }
@@ -454,7 +729,34 @@ function teardownAll(reasonText) {
   myIsHost = false;
   users.clear();
   pendingConnections.clear();
+  
+  // Clear all typing indicators
+  typingUsers.clear();
+  updateTypingDisplay();
+  stopTyping();
+  
+  // Clear reconnection state when manually leaving
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  isReconnecting = false;
+  reconnectAttempts = 0;
+  wasConnected = false;
+  
+  // Reset dashboard stats
+  stats.messagesCount = 0;
+  stats.filesShared = 0;
+  room = '';
+  displayName = '';
+  roomName = '';
+  
+  // Always clear messages when leaving room
+  els.messages.innerHTML = '';
+  
   updateUserList();
+  updateDashboardStats();
+  updateRoomInfo();
   addSystem(reasonText);
   setTimeout(() => location.reload(), 250);
 }
@@ -473,6 +775,15 @@ function addMessage(text, isMe, who = '') {
   div.innerHTML = who ? `<strong>${who}:</strong> ${escapeHtml(text)}` : escapeHtml(text);
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
+  
+  // Track message stats for dashboard
+  if (isMe) {
+    stats.messagesCount++;
+    updateDashboardStats();
+  } else {
+    // Play sound for incoming messages (not your own)
+    playNotificationSound();
+  }
 }
 
 function addFile(name, url, isMe, who = '') {
@@ -482,12 +793,349 @@ function addFile(name, url, isMe, who = '') {
   div.innerHTML = `${label}<a href="${url}" download="${name}">📎 ${escapeHtml(name)}</a>`;
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
+  
+  // Track file stats for dashboard
+  if (isMe) {
+    stats.filesShared++;
+    updateDashboardStats();
+  } else {
+    // Play sound for incoming files (not your own)
+    playNotificationSound();
+  }
 }
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-window.addEventListener('online', () => {
-  if (room && displayName && passphrase) location.reload();
+// Auto-reconnect functionality
+let reconnectTimeout = null;
+let isReconnecting = false;
+let wasConnected = false;
+let reconnectAttempts = 0;
+let maxReconnectAttempts = 5;
+
+function attemptReconnect() {
+  if (!appSettings.autoReconnect || isReconnecting || !room || !displayName || !passphrase) return;
+  
+  isReconnecting = true;
+  reconnectAttempts++;
+  
+  if (reconnectAttempts <= maxReconnectAttempts) {
+    addSystem(`Connection lost. Reconnecting immediately... (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+    
+    reconnectTimeout = setTimeout(async () => {
+      if (room && displayName && passphrase) {
+        addSystem('Attempting to reconnect...');
+        
+        try {
+          // Try to reconnect to the socket first
+          if (socket.disconnected) {
+            socket.connect();
+          }
+          
+          // Wait a moment for socket to connect
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          if (socket.connected) {
+            // Clear existing peer connections first
+            for (const peerId of [...peerConnections.keys()]) {
+              cleanupPeer(peerId);
+            }
+            
+            // Re-derive encryption key and rejoin room
+            encryptionKey = await deriveKey(passphrase);
+            const passphraseHash = await getPassphraseHash(passphrase);
+            
+            // Rejoin the room
+            socket.emit('join-room', { room, name: displayName, roomName, passphraseHash });
+            addSystem(`Reconnected successfully as ${displayName}`);
+            
+            // Reset reconnect attempts on success
+            reconnectAttempts = 0;
+            isReconnecting = false;
+            
+            // Update dashboard
+            updateRoomInfo();
+            updateGlobalStatus();
+          } else {
+            // Socket still not connected, try again
+            isReconnecting = false;
+            setTimeout(() => attemptReconnect(), 2000);
+          }
+        } catch (e) {
+          console.error('Reconnection failed:', e);
+          isReconnecting = false;
+          
+          if (reconnectAttempts < maxReconnectAttempts) {
+            setTimeout(() => attemptReconnect(), 2000);
+          } else {
+            addSystem('Reconnection failed after maximum attempts. Please refresh the page.');
+          }
+        }
+      } else {
+        isReconnecting = false;
+      }
+    }, 500); // Small delay to prevent overwhelming the server
+  } else {
+    addSystem('Maximum reconnection attempts reached. Please refresh the page to reconnect.');
+    isReconnecting = false;
+  }
+}
+
+// Socket connection monitoring
+socket.on('connect', () => {
+  if (wasConnected && room && displayName && passphrase && appSettings.autoReconnect) {
+    addSystem('Socket reconnected. Rejoining room...');
+    
+    // Clear existing peer connections before rejoining
+    for (const peerId of [...peerConnections.keys()]) {
+      cleanupPeer(peerId);
+    }
+    
+    attemptReconnect();
+  }
+  wasConnected = true;
 });
+
+socket.on('disconnect', (reason) => {
+  if (room && displayName && passphrase && appSettings.autoReconnect) {
+    if (reason === 'io server disconnect') {
+      addSystem('Server disconnected. Attempting to reconnect...');
+    } else if (reason === 'transport close') {
+      addSystem('Connection lost. Attempting to reconnect...');
+    } else {
+      addSystem('Disconnected. Attempting to reconnect...');
+    }
+    
+    // Start reconnection attempts after a short delay
+    setTimeout(() => {
+      if (!socket.connected && appSettings.autoReconnect) {
+        attemptReconnect();
+      }
+    }, 1000);
+  }
+});
+
+// Handle connection events
+window.addEventListener('online', () => {
+  if (room && displayName && passphrase && appSettings.autoReconnect) {
+    addSystem('Network connection restored. Reconnecting...');
+    
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
+    
+    // Reset attempts when network comes back
+    reconnectAttempts = 0;
+    
+    if (!socket.connected) {
+      attemptReconnect();
+    }
+  }
+});
+
+window.addEventListener('offline', () => {
+  if (appSettings.autoReconnect && room && displayName && passphrase) {
+    addSystem('Network connection lost. Will attempt to reconnect when online.');
+    
+    // Clear any pending reconnection attempts
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
+    isReconnecting = false;
+  }
+});
+
+// Dashboard modal functionality
+function openDashboard() {
+  els.dashboardOverlay.classList.add('active');
+  updateDashboardStats();
+  updateRoomInfo();
+}
+
+function closeDashboard() {
+  els.dashboardOverlay.classList.remove('active');
+}
+
+// Event listeners for dashboard modal
+els.dashboardBtn.onclick = openDashboard;
+els.dashboardClose.onclick = closeDashboard;
+
+// Close modal when clicking outside of it
+els.dashboardOverlay.onclick = (e) => {
+  if (e.target === els.dashboardOverlay) {
+    closeDashboard();
+  }
+};
+
+// Close modals with Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (els.dashboardOverlay.classList.contains('active')) {
+      closeDashboard();
+    } else if (els.settingsOverlay.classList.contains('active')) {
+      closeSettings();
+    } else if (els.helpOverlay.classList.contains('active')) {
+      closeHelp();
+    }
+  }
+});
+
+// Settings modal functionality
+function openSettings() {
+  els.settingsOverlay.classList.add('active');
+  loadSettings();
+}
+
+function closeSettings() {
+  els.settingsOverlay.classList.remove('active');
+}
+
+// Event listeners for settings modal
+els.settingsBtn.onclick = openSettings;
+els.settingsClose.onclick = closeSettings;
+
+// Close modal when clicking outside of it
+els.settingsOverlay.onclick = (e) => {
+  if (e.target === els.settingsOverlay) {
+    closeSettings();
+  }
+};
+
+// Help modal functionality
+function openHelp() {
+  els.helpOverlay.classList.add('active');
+}
+
+function closeHelp() {
+  els.helpOverlay.classList.remove('active');
+}
+
+// Event listeners for help modal
+els.helpBtn.onclick = openHelp;
+els.helpClose.onclick = closeHelp;
+
+// Close modal when clicking outside of it
+els.helpOverlay.onclick = (e) => {
+  if (e.target === els.helpOverlay) {
+    closeHelp();
+  }
+};
+
+// Dashboard update functions
+function updateDashboardStats() {
+  // Get real-time connection count from existing dataChannels
+  const connected = Array.from(dataChannels.values()).filter(ch => ch.readyState === 'open').length;
+  
+  // Update dashboard elements if they exist
+  if (els.connectedPeers) els.connectedPeers.textContent = connected;
+  if (els.messagesCount) els.messagesCount.textContent = stats.messagesCount;
+  if (els.filesShared) els.filesShared.textContent = stats.filesShared;
+  
+  // Update connection status with real data
+  if (els.connectionStatus && els.connectionDot) {
+    if (pendingConnections.size > 0) {
+      els.connectionStatus.textContent = 'Connecting to peers...';
+      els.connectionDot.classList.remove('online');
+    } else if (connected > 0) {
+      els.connectionStatus.textContent = `Connected to ${connected} peer${connected > 1 ? 's' : ''}`;
+      els.connectionDot.classList.add('online');
+    } else {
+      els.connectionStatus.textContent = 'Disconnected';
+      els.connectionDot.classList.remove('online');
+    }
+  }
+}
+
+function updateRoomInfo() {
+  if (room && displayName) {
+    els.roomInfoSection.style.display = 'block';
+    els.currentRoomId.textContent = room;
+    els.currentRoomName.textContent = roomName || room;
+    els.currentUserName.textContent = displayName;
+  } else {
+    els.roomInfoSection.style.display = 'none';
+  }
+}
+// Settings functionality
+function loadSettings() {
+  const settings = JSON.parse(localStorage.getItem('stealthlan-settings') || '{}');
+  
+  // Update appSettings object
+  appSettings.darkMode = settings.darkMode !== false;
+  appSettings.soundNotifications = settings.soundNotifications !== false;
+  appSettings.showTypingIndicator = settings.showTypingIndicator !== false;
+  appSettings.autoReconnect = settings.autoReconnect !== false;
+  
+  // Update UI elements
+  if (els.darkModeToggle) els.darkModeToggle.checked = appSettings.darkMode;
+  if (els.soundNotifications) els.soundNotifications.checked = appSettings.soundNotifications;
+  if (els.showTypingIndicator) els.showTypingIndicator.checked = appSettings.showTypingIndicator;
+  if (els.autoReconnect) els.autoReconnect.checked = appSettings.autoReconnect;
+  
+  // Apply dark mode
+  applyDarkMode();
+}
+function saveSettings() {
+  // Update appSettings from UI
+  appSettings.darkMode = els.darkModeToggle?.checked !== false;
+  appSettings.soundNotifications = els.soundNotifications?.checked !== false;
+  appSettings.showTypingIndicator = els.showTypingIndicator?.checked !== false;
+  appSettings.autoReconnect = els.autoReconnect?.checked !== false;
+  
+  // Save to localStorage
+  localStorage.setItem('stealthlan-settings', JSON.stringify(appSettings));
+  
+  // Apply changes
+  applyDarkMode();
+}
+
+function applyDarkMode() {
+  if (appSettings.darkMode) {
+    document.body.classList.remove('light-mode');
+    document.body.classList.add('dark-mode');
+  } else {
+    document.body.classList.remove('dark-mode');
+    document.body.classList.add('light-mode');
+  }
+}
+
+function resetSettings() {
+  localStorage.removeItem('stealthlan-settings');
+  // Reset appSettings to defaults
+  appSettings = {
+    darkMode: true,
+    soundNotifications: true,
+    showTypingIndicator: true,
+    autoReconnect: true
+  };
+  loadSettings();
+  alert('Settings reset to defaults');
+}
+
+function exportSettings() {
+  const settings = localStorage.getItem('stealthlan-settings') || '{}';
+  const blob = new Blob([settings], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'stealthlan-settings.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Settings event listeners
+if (els.darkModeToggle) els.darkModeToggle.onchange = saveSettings;
+if (els.soundNotifications) els.soundNotifications.onchange = saveSettings;
+if (els.showTypingIndicator) els.showTypingIndicator.onchange = saveSettings;
+if (els.autoReconnect) els.autoReconnect.onchange = saveSettings;
+if (els.resetSettings) els.resetSettings.onclick = resetSettings;
+if (els.exportSettings) els.exportSettings.onclick = exportSettings;
+
+// Initialize dashboard and settings on page load
+updateDashboardStats();
+updateRoomInfo();
+loadSettings();
