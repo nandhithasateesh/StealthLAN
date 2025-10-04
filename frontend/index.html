@@ -269,21 +269,24 @@
               <input id="nameInput" placeholder="e.g. Alex" />
             </label>
 
-            <div class="row">
+            <div class="input-controls">
               <button id="createBtn" class="btn primary">Create Room</button>
-              <button id="joinBtn" class="btn primary">Join Room</button>
+              <button id="joinBtn" class="btn secondary">Join Room</button>
             </div>
 
             <div class="hint">Use same passphrase on all devices. Messages vanish on close.</div>
           </div>
 
           <div class="footer">
-            <small>Local-only • E2E AES-GCM • Files & Text</small>
           </div>
         </div>
 
         <!-- CHAT SCREEN -->
         <div id="app" class="chat-panel hidden glass">
+          <div class="refresh-warning">
+            <span class="warning-icon">⚠️</span>
+            <span class="warning-text">Warning: Refreshing this page will clear all messages and exit the room</span>
+          </div>
           <div class="room-name" id="roomNameDisplay"></div>
           <div class="chat-top">
             <div class="peer-info">
@@ -313,11 +316,16 @@
 
           <div class="composer">
             <input id="textInput" placeholder="Type a secure message..." autocomplete="off" />
-            <label class="file-attach" title="Attach a file">
-              <input id="fileInput" type="file" />
-              📎
-            </label>
+            <button class="file-attach" id="fileAttachBtn" title="Attach a file">📎</button>
+            <input id="fileInput" type="file" style="display: none;" />
+            <button id="voiceBtn" class="voice-btn" title="Record Voice Message">🎤</button>
+            <span id="voiceTimer" class="voice-timer hidden">00:00</span>
             <button id="sendText" class="btn circle" title="Send">➤</button>
+          </div>
+          
+          <div id="voiceControls" class="voice-controls hidden">
+            <button id="sendVoice" class="btn primary">Send Voice Message</button>
+            <button id="deleteVoice" class="btn ghost">Delete</button>
           </div>
 
           <div class="small-controls">

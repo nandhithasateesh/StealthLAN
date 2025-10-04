@@ -1,5 +1,12 @@
 1.typing (done)
 2.removing the auto deleting of messages(done)
 3.enter button should automatically send the typed messages(done)
-4.voice messages
-5.alert messages at the top for refresh
+4.voice messages(done)
+5.alert messages at the top for refresh(done)
+6.passphrase changing option in the group
+
+
+
+and this is the only part that
+i need you to change where
+this shouldnt affect the other existing part of the code

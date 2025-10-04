@@ -40,7 +40,13 @@ const els = {
   textInput: document.getElementById('textInput'),
   sendText: document.getElementById('sendText'),
   fileInput: document.getElementById('fileInput'),
+  fileAttachBtn: document.getElementById('fileAttachBtn'),
   sendFile: document.getElementById('sendFile'),
+  voiceBtn: document.getElementById('voiceBtn'),
+  voiceTimer: document.getElementById('voiceTimer'),
+  voiceControls: document.getElementById('voiceControls'),
+  sendVoice: document.getElementById('sendVoice'),
+  deleteVoice: document.getElementById('deleteVoice'),
   statusDot: document.querySelector('.dot'),
   roomNameDisplay: document.getElementById('roomNameDisplay'),
   userListUl: document.getElementById('userListUl'),
@@ -96,6 +102,18 @@ let isTyping = false;
 
 // Global audio context for better performance and sync
 let globalAudioContext = null;
+
+// Voice recording state
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+let recordingTimer = null;
+let recordingStartTime = 0;
+let recordingDuration = 0;
+let currentVoiceBlob = null;
+
+// File staging state
+let stagedFile = null;
 
 // Initialize audio context on first user interaction
 function initializeAudioContext() {
@@ -162,6 +180,174 @@ function playActualSound(audioContext) {
     console.log('Sound generation failed');
   }
 }
+
+// Voice recording functions
+async function startVoiceRecording() {
+  try {
+    // Delete any existing recording first
+    if (currentVoiceBlob) {
+      currentVoiceBlob = null;
+      hideVoiceControls();
+    }
+    
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordedChunks = [];
+    
+    mediaRecorder = new MediaRecorder(stream);
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    };
+    
+    mediaRecorder.onstop = () => {
+      currentVoiceBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+      showVoiceControls();
+      
+      // Stop all tracks to release microphone
+      stream.getTracks().forEach(track => track.stop());
+    };
+    
+    mediaRecorder.start();
+    isRecording = true;
+    recordingStartTime = Date.now();
+    
+    // Update UI
+    els.voiceBtn.classList.add('recording');
+    els.voiceBtn.title = 'Stop Recording';
+    els.voiceTimer.classList.remove('hidden');
+    
+    // Start timer
+    startRecordingTimer();
+    
+    // Auto-stop after 60 seconds
+    setTimeout(() => {
+      if (isRecording) {
+        stopVoiceRecording();
+      }
+    }, 60000);
+    
+  } catch (error) {
+    console.error('Error accessing microphone:', error);
+    alert('Could not access microphone. Please check permissions.');
+  }
+}
+
+function stopVoiceRecording() {
+  if (mediaRecorder && isRecording) {
+    // Calculate final duration before stopping
+    recordingDuration = Math.floor((Date.now() - recordingStartTime) / 1000);
+    
+    mediaRecorder.stop();
+    isRecording = false;
+    
+    // Update UI
+    els.voiceBtn.classList.remove('recording');
+    els.voiceBtn.title = 'Record Voice Message';
+    els.voiceTimer.classList.add('hidden');
+    
+    // Stop timer
+    stopRecordingTimer();
+  }
+}
+
+function startRecordingTimer() {
+  recordingTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    els.voiceTimer.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, 1000);
+}
+
+function stopRecordingTimer() {
+  if (recordingTimer) {
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+  }
+  els.voiceTimer.textContent = '00:00';
+}
+
+function showVoiceControls() {
+  els.voiceControls.classList.remove('hidden');
+  
+  // Update send button to show duration
+  const durationText = formatDuration(recordingDuration);
+  els.sendVoice.textContent = `Send Voice Message (${durationText})`;
+}
+
+function hideVoiceControls() {
+  els.voiceControls.classList.add('hidden');
+  // Reset send button text
+  els.sendVoice.textContent = 'Send Voice Message';
+}
+
+function sendCurrentVoiceMessage() {
+  if (currentVoiceBlob) {
+    // Check if we have connected peers
+    if (dataChannels.size === 0) {
+      alert('No peers connected yet.');
+      return;
+    }
+    
+    // Prevent multiple sends by immediately hiding controls
+    hideVoiceControls();
+    
+    // Create a File object from the blob
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `voice-message-${timestamp}.webm`;
+    const file = new File([currentVoiceBlob], fileName, { type: 'audio/webm' });
+    
+    // Add voice message to own chat with duration
+    addVoiceMessage(file.name, URL.createObjectURL(currentVoiceBlob), true, displayName, recordingDuration);
+    
+    // Send to all connected peers
+    sendFileToAll(file);
+    
+    // Clean up
+    currentVoiceBlob = null;
+    recordingDuration = 0;
+  }
+}
+
+function deleteCurrentVoiceMessage() {
+  currentVoiceBlob = null;
+  hideVoiceControls();
+}
+
+// Voice message playback function
+function toggleVoicePlayback(button, audioUrl) {
+  const audioElement = button.parentElement.querySelector('audio');
+  
+  if (audioElement.paused) {
+    // Stop any other playing voice messages
+    document.querySelectorAll('.voice-message audio').forEach(audio => {
+      if (!audio.paused) {
+        audio.pause();
+        audio.currentTime = 0;
+        const btn = audio.parentElement.querySelector('.voice-play-btn');
+        btn.textContent = '▶️';
+      }
+    });
+    
+    // Play this voice message
+    audioElement.play();
+    button.textContent = '⏸️';
+    
+    audioElement.onended = () => {
+      button.textContent = '▶️';
+    };
+  } else {
+    // Pause this voice message
+    audioElement.pause();
+    audioElement.currentTime = 0;
+    button.textContent = '▶️';
+  }
+}
+
+// Make function globally accessible for onclick handlers
+window.toggleVoicePlayback = toggleVoicePlayback;
 // Typing indicator functions
 async function sendTypingIndicator(isTypingNow) {
   if (!appSettings.showTypingIndicator) return;
@@ -517,7 +703,8 @@ function completeFile(peerId, fileId) {
   const blob = new Blob([buf], { type: st.mime || 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
 
-  addFile(st.name, url, false, peerNames.get(peerId) || peerId);
+  const senderName = peerNames.get(peerId) || peerId;
+  addFile(st.name, url, false, senderName);
   incomingFiles.delete(key);
 }
 
@@ -688,14 +875,57 @@ els.sendText.onclick = async () => {
   await sendTextToAll(text);
 };
 
-els.sendFile.onclick = async () => {
-  const file = els.fileInput.files[0];
-  if (!file) return alert('No file selected.');
-  if (dataChannels.size === 0) return alert('No peers connected yet.');
+// File attach button opens file picker
+els.fileAttachBtn.onclick = () => {
+  els.fileInput.click();
+};
 
-  addFile(file.name, URL.createObjectURL(file), true, displayName);
-  await sendFileToAll(file);
+// Send file button sends staged file
+els.sendFile.onclick = () => {
+  if (stagedFile) {
+    // Send the staged file
+    if (dataChannels.size === 0) return alert('No peers connected yet.');
+    
+    addFile(stagedFile.name, URL.createObjectURL(stagedFile), true, displayName);
+    sendFileToAll(stagedFile);
+    
+    // Clear staged file and reset button
+    stagedFile = null;
+    els.sendFile.textContent = 'Send File';
+  } else {
+    alert('No file selected. Click the 📎 button to select a file first.');
+  }
+};
+
+els.fileInput.onchange = () => {
+  const file = els.fileInput.files[0];
+  if (!file) return;
+  
+  // Stage the file
+  stagedFile = file;
+  els.sendFile.textContent = `Send: ${file.name}`;
+  
+  // Clear the input so same file can be selected again
   els.fileInput.value = '';
+};
+
+// Voice recording event listeners
+els.voiceBtn.onclick = () => {
+  if (dataChannels.size === 0) return alert('No peers connected yet.');
+  
+  if (isRecording) {
+    stopVoiceRecording();
+  } else {
+    startVoiceRecording();
+  }
+};
+
+els.sendVoice.onclick = () => {
+  sendCurrentVoiceMessage();
+};
+
+els.deleteVoice.onclick = () => {
+  deleteCurrentVoiceMessage();
 };
 
 /* ------------- helpers ------------- */
@@ -787,10 +1017,19 @@ function addMessage(text, isMe, who = '') {
 }
 
 function addFile(name, url, isMe, who = '') {
+  // Check if it's a voice message
+  if (name.includes('voice-message') && (name.endsWith('.webm') || name.endsWith('.wav') || name.endsWith('.mp3'))) {
+    // For voice messages, use the dedicated voice message function
+    addVoiceMessageWithAudioDetection(name, url, isMe, who);
+    return;
+  }
+  
+  // Regular file handling
   const div = document.createElement('div');
   div.className = `message ${isMe ? 'msg-me' : 'msg-other'}`;
   const label = who ? `<strong>${who}:</strong> ` : '';
   div.innerHTML = `${label}<a href="${url}" download="${name}">📎 ${escapeHtml(name)}</a>`;
+  
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
   
@@ -802,6 +1041,94 @@ function addFile(name, url, isMe, who = '') {
     // Play sound for incoming files (not your own)
     playNotificationSound();
   }
+}
+
+function addVoiceMessage(name, url, isMe, who = '', duration = null) {
+  const div = document.createElement('div');
+  div.className = `message ${isMe ? 'msg-me' : 'msg-other'}`;
+  const label = who ? `<strong>${who}:</strong> ` : '';
+  
+  const durationText = duration ? formatDuration(duration) : '00:00';
+  
+  div.innerHTML = `
+    ${label}
+    <div class="voice-message">
+      <button class="voice-play-btn" onclick="toggleVoicePlayback(this, '${url}')">▶️</button>
+      <span class="voice-label">🎤 Voice Message</span>
+      <span class="voice-duration">${durationText}</span>
+      <audio preload="metadata" style="display: none;">
+        <source src="${url}" type="audio/webm">
+        <source src="${url}" type="audio/wav">
+        Your browser does not support audio playback.
+      </audio>
+    </div>
+  `;
+  
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+  
+  // Track file stats for dashboard
+  if (isMe) {
+    stats.filesShared++;
+    updateDashboardStats();
+  } else {
+    // Play sound for incoming voice messages (not your own)
+    playNotificationSound();
+  }
+}
+
+function addVoiceMessageWithAudioDetection(name, url, isMe, who) {
+  const div = document.createElement('div');
+  div.className = `message ${isMe ? 'msg-me' : 'msg-other'}`;
+  const label = who ? `<strong>${who}:</strong> ` : '';
+  
+  // Show voice message immediately with placeholder duration
+  div.innerHTML = `
+    ${label}
+    <div class="voice-message">
+      <button class="voice-play-btn" onclick="toggleVoicePlayback(this, '${url}')">▶️</button>
+      <span class="voice-label">🎤 Voice Message</span>
+      <span class="voice-duration">00:00</span>
+      <audio preload="metadata" style="display: none;">
+        <source src="${url}" type="audio/webm">
+        <source src="${url}" type="audio/wav">
+        Your browser does not support audio playback.
+      </audio>
+    </div>
+  `;
+  
+  // Add to messages immediately
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+  
+  // Try to get duration and update
+  const tempAudio = document.createElement('audio');
+  tempAudio.preload = 'metadata';
+  tempAudio.src = url;
+  
+  tempAudio.onloadedmetadata = () => {
+    const duration = Math.floor(tempAudio.duration);
+    const durationText = formatDuration(duration);
+    const durationSpan = div.querySelector('.voice-duration');
+    if (durationSpan) {
+      durationSpan.textContent = durationText;
+    }
+  };
+  
+  // Track file stats for dashboard
+  if (isMe) {
+    stats.filesShared++;
+    updateDashboardStats();
+  } else {
+    // Play sound for incoming voice messages (not your own)
+    playNotificationSound();
+  }
+}
+
+function formatDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
 function escapeHtml(s) {
